@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package route256.ozon.ru.project.loms.api.orders.v1;
+
+option go_package = "route256.ozon.ru/project/loms/gen/api/orders/v1;orders";
+
+import "validate/validate.proto";
+
+service LOMS {
+    rpc OrderCreate(OrderCreateReq) returns(OrderCreateResp) {}
+    rpc OrderGetInfo(OrderGetInfoReq) returns(OrderGetInfoResp) {}
+    rpc OrderGetStockInfo(OrderGetStockInfoReq) returns(OrderGetStockInfoResp) {}
+    rpc OrderCancel(OrderCancelReq) returns(OrderCancelResp) {}
+    rpc OrderPay(OrderPayReq) returns(OrderPayResp) {}
+}
+
+// Common
+message Item {
+    uint32 sku  = 1[
+        (validate.rules).uint32 = {ignore_empty: false, gt: 0}
+    ];
+    uint32 count = 2;
+}
+
+// OrderCreate
+message Order {
+    int64 user_id = 1[
+        (validate.rules).int64 = {ignore_empty: false, gt: 0}
+    ];
+    repeated Item items = 2[
+        (validate.rules).repeated = {
+            min_items: 1
+        }
+    ];
+}
+
+message OrderCreateReq {
+    Order order = 1[
+        (validate.rules).message = {required: true}
+    ];
+}
+
+message OrderCreateResp {
+    uint64 order_id = 1;
+}
+
+// OrderGetInfo
+message OrderGetInfoReq {
+    uint64 order_id = 1[
+        (validate.rules).uint64 = {ignore_empty: false, gt: 0}
+    ];
+}
+
+enum Statuses {
+    STATUS_UNSPECIFIED      = 0;
+    STATUS_NEW              = 1;
+	STATUS_AWAITING_PAYMENT = 2;
+	STATUS_FAILED           = 3;
+	STATUS_PAYED            = 4;
+	STATUS_CANCELED         = 5;
+}
+
+message OrderGetInfoResp {
+    Statuses status = 1;
+    int64 user_id = 2;
+    repeated Item items = 3;
+}
+
+// OrderGetStockInfo
+message OrderGetStockInfoReq {
+    uint32 sku = 1[
+        (validate.rules).uint32 = {ignore_empty: false, gt: 0}
+    ];
+}
+
+message OrderGetStockInfoResp {
+    uint64 count = 1;
+}
+
+// OrderCancel
+message OrderCancelReq {
+    uint64 order_id = 1[
+        (validate.rules).uint64 = {ignore_empty: false, gt: 0}
+    ];
+}
+
+message OrderCancelResp {
+}
+
+// OrderPay
+message OrderPayReq {
+    uint64 order_id = 1[
+        (validate.rules).uint64 = {ignore_empty: false, gt: 0}
+    ];
+}
+
+message OrderPayResp {
+}

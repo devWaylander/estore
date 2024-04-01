@@ -1,0 +1,18 @@
+version: "3.1"
+services:
+  cart:
+    image: cart
+    build: ./cart/
+    ports:
+      - "8082:8080"
+    networks:
+      - grpcNet
+  loms:
+    image: loms
+    build: ./loms/
+    ports:
+      - "8084:50051"
+    networks:
+      - grpcNet
+networks:
+  grpcNet:
