@@ -8,10 +8,13 @@ run-all: buildCart buildLoms
 	docker compose up --build
 
 cartServiceMockGen:
-
+	minimock -i ./cart/internal/handler.Service -o ./cart/internal/service && \
+	cd ./cart/internal/service && minimock
 
 lomsServiceMockGen:
-
+	minimock -i ./loms/internal/app.LOMSService -o ./loms/internal/service && \
+	minimock -i ./loms/internal/service.OrderRepository -o ./loms/internal/service && \
+	minimock -i ./loms/internal/service.StockRepository -o ./loms/internal/service
 
 cartServiceCoverage:
 	@go test ./cart/internal/service -timeout 5s -cover -count=1

@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	skuID  = 31147466
+	skuID  = 773297411
 	userID = 1
 	cartID = userID + 1
 )
@@ -29,10 +29,11 @@ func TestAddToCart(t *testing.T) {
 	t.Parallel()
 
 	mc := minimock.NewController(t)
-	productServiceMock := NewProductExternalServiceMock(mc)
+	productClientMock := NewProductClientMock(mc)
+	stocksClientMock := NewStocksClientMock(mc)
 	repoMock := NewRepositoryMock(mc)
 
-	service := New(repoMock, productServiceMock)
+	service := New(repoMock, productClientMock, stocksClientMock)
 
 	tests := []struct {
 		name      string
@@ -65,7 +66,8 @@ func TestAddToCart(t *testing.T) {
 
 			repoMock.GetCartByUserIDMock.Expect(ctx, tt.inputData.userID).Return(model.Cart{}, nil)
 			repoMock.CreateCartMock.Expect(ctx, tt.inputData.userID).Return(model.Cart{}, nil)
-			productServiceMock.GetProductMock.Expect(uint32(tt.inputData.skuID)).Return(&model.Good{}, tt.wantErr)
+			productClientMock.GetProductMock.Expect(ctx, uint32(tt.inputData.skuID)).Return(&model.Good{}, tt.wantErr)
+			stocksClientMock.GetStocksInfoMock.Expect(ctx, uint32(tt.inputData.skuID)).Return(uint64(tt.inputData.count), tt.wantErr)
 			if tt.wantErr == nil {
 				repoMock.AddGoodToCartMock.Expect(ctx, tt.inputData.userID, model.Good{Count: tt.inputData.count}).Return(nil)
 			}
@@ -80,10 +82,11 @@ func TestRemoveFromCart(t *testing.T) {
 	t.Parallel()
 
 	mc := minimock.NewController(t)
-	productServiceMock := NewProductExternalServiceMock(mc)
+	productClientMock := NewProductClientMock(mc)
+	stocksClientMock := NewStocksClientMock(mc)
 	repoMock := NewRepositoryMock(mc)
 
-	service := New(repoMock, productServiceMock)
+	service := New(repoMock, productClientMock, stocksClientMock)
 
 	tests := []struct {
 		name      string
@@ -127,10 +130,11 @@ func TestCleanupCart(t *testing.T) {
 	t.Parallel()
 
 	mc := minimock.NewController(t)
-	productServiceMock := NewProductExternalServiceMock(mc)
+	productClientMock := NewProductClientMock(mc)
+	stocksClientMock := NewStocksClientMock(mc)
 	repoMock := NewRepositoryMock(mc)
 
-	service := New(repoMock, productServiceMock)
+	service := New(repoMock, productClientMock, stocksClientMock)
 
 	tests := []struct {
 		name      string
@@ -174,10 +178,11 @@ func TestGetCart(t *testing.T) {
 	t.Parallel()
 
 	mc := minimock.NewController(t)
-	productServiceMock := NewProductExternalServiceMock(mc)
+	productClientMock := NewProductClientMock(mc)
+	stocksClientMock := NewStocksClientMock(mc)
 	repoMock := NewRepositoryMock(mc)
 
-	service := New(repoMock, productServiceMock)
+	service := New(repoMock, productClientMock, stocksClientMock)
 
 	tests := []struct {
 		name      string
@@ -213,7 +218,7 @@ func TestGetCart(t *testing.T) {
 
 			repoMock.GetCartByUserIDMock.Expect(ctx, tt.inputData.userID).Return(model.Cart{ID: tt.inputData.cartID, Goods: tt.inputData.goods}, tt.wantErr)
 			for i := range tt.inputData.goods {
-				productServiceMock.GetProductMock.When(tt.inputData.goods[i].SkuID).Then(&model.Good{}, tt.wantErr)
+				productClientMock.GetProductMock.When(ctx, tt.inputData.goods[i].SkuID).Then(&model.Good{}, tt.wantErr)
 			}
 
 			_, err := service.GetCart(ctx, tt.inputData.userID)

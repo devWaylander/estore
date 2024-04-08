@@ -5,11 +5,14 @@ import (
 	"errors"
 	"log"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	internalErrors "route256.ozon.ru/project/loms/internal/errors"
 	"route256.ozon.ru/project/loms/internal/model"
+	orders_repo "route256.ozon.ru/project/loms/internal/repo/db_repo/orders"
+	stocks_repo "route256.ozon.ru/project/loms/internal/repo/db_repo/stocks"
 )
 
-type Repository interface {
+type MemoryRepository interface {
 	CreateOrder(ctx context.Context, data model.Order) (uint64, error)
 	GetOrder(ctx context.Context, orderID uint64) (model.Order, error)
 	UpdateOrderStatus(ctx context.Context, orderID uint64, status string) error
@@ -17,18 +20,54 @@ type Repository interface {
 	UpdateStock(ctx context.Context, data model.Stock) error
 }
 
-type service struct {
-	repo Repository
+type OrderRepository interface {
+	CreateItem(ctx context.Context, arg orders_repo.CreateItemParams) error
+	GetItemsByOrderID(ctx context.Context, orderID int64) ([]orders_repo.GetItemsByOrderIDRow, error)
+	CreateOrder(ctx context.Context, userID int64) (int64, error)
+	GetOrder(ctx context.Context, id int64) (orders_repo.GetOrderRow, error)
+	UpdateOrder(ctx context.Context, arg orders_repo.UpdateOrderParams) error
 }
 
-func New(repo Repository) *service {
+type StockRepository interface {
+	CreateStock(ctx context.Context, arg stocks_repo.CreateStockParams) error
+	GetStockBySKU(ctx context.Context, sku int32) (stocks_repo.StocksStock, error)
+	UpdateStock(ctx context.Context, arg stocks_repo.UpdateStockParams) error
+}
+
+type service struct {
+	ordersRepo OrderRepository
+	stocksRepo StockRepository
+}
+
+func New(ordersRepo OrderRepository, stocksRepo StockRepository) *service {
 	return &service{
-		repo: repo,
+		ordersRepo: ordersRepo,
+		stocksRepo: stocksRepo,
 	}
 }
 
-func (s *service) updateOrderStatus(ctx context.Context, data model.Order) error {
-	err := s.repo.UpdateOrderStatus(ctx, data.ID, data.Status)
+func (s *service) getItemsByOrderID(ctx context.Context, orderID uint64) ([]model.Item, error) {
+	dbItems, err := s.ordersRepo.GetItemsByOrderID(ctx, int64(orderID))
+	if err != nil {
+		return []model.Item{}, err
+	}
+
+	items := make([]model.Item, len(dbItems))
+	for i, e := range dbItems {
+		items[i] = model.Item{
+			SKU:   uint32(e.Sku),
+			Count: uint16(e.Count),
+		}
+	}
+
+	return items, nil
+}
+
+func (s *service) updateOrderStatus(ctx context.Context, orderID uint64, status string) error {
+	err := s.ordersRepo.UpdateOrder(ctx, orders_repo.UpdateOrderParams{
+		ID:     int64(orderID),
+		Status: pgtype.Text{String: status, Valid: true},
+	})
 	if err != nil {
 		log.Println(err)
 		return err
@@ -39,13 +78,22 @@ func (s *service) updateOrderStatus(ctx context.Context, data model.Order) error
 
 func (s *service) stocksReserve(ctx context.Context, data []model.Item) error {
 	for _, e := range data {
-		stock := s.repo.GetStockBySKU(ctx, e.SKU)
-		if e.Count > (stock.TotalCount - stock.Reserved) {
+		count := int32(e.Count)
+		stock, err := s.stocksRepo.GetStockBySKU(ctx, int32(e.SKU))
+		if err != nil {
+			return err
+		}
+		if count > (stock.TotalCount - stock.Reserved) {
 			return errors.New(internalErrors.ErrStocksAreEmpty)
 		}
 
-		stock.Reserved = stock.Reserved + e.Count
-		err := s.repo.UpdateStock(ctx, stock)
+		stock.Reserved = stock.Reserved + count
+		err = s.stocksRepo.UpdateStock(ctx, stocks_repo.UpdateStockParams{
+			ID:         stock.ID,
+			Sku:        stock.Sku,
+			Reserved:   stock.Reserved,
+			TotalCount: stock.TotalCount,
+		})
 		if err != nil {
 			log.Println(err)
 			return err
@@ -57,14 +105,24 @@ func (s *service) stocksReserve(ctx context.Context, data []model.Item) error {
 
 func (s *service) stocksRemove(ctx context.Context, data []model.Item, isCancel bool) error {
 	for _, e := range data {
-		stock := s.repo.GetStockBySKU(ctx, e.SKU)
-		stock.Reserved = stock.Reserved - e.Count
-
-		if !isCancel {
-			stock.TotalCount = stock.TotalCount - e.Count
+		count := int32(e.Count)
+		stock, err := s.stocksRepo.GetStockBySKU(ctx, int32(e.SKU))
+		if err != nil {
+			return err
 		}
 
-		err := s.repo.UpdateStock(ctx, stock)
+		stock.Reserved = stock.Reserved - count
+
+		if !isCancel {
+			stock.TotalCount = stock.TotalCount - count
+		}
+
+		err = s.stocksRepo.UpdateStock(ctx, stocks_repo.UpdateStockParams{
+			ID:         stock.ID,
+			Sku:        stock.Sku,
+			Reserved:   stock.Reserved,
+			TotalCount: stock.TotalCount,
+		})
 		if err != nil {
 			log.Println(err)
 			return err
@@ -76,7 +134,7 @@ func (s *service) stocksRemove(ctx context.Context, data []model.Item, isCancel 
 
 func (s *service) OrderCreate(ctx context.Context, data model.Order) (uint64, error) {
 	data.Status = model.StatusNew
-	id, err := s.repo.CreateOrder(ctx, data)
+	id, err := s.ordersRepo.CreateOrder(ctx, data.UserID)
 	if err != nil {
 		log.Println(err)
 		return 0, err
@@ -84,45 +142,70 @@ func (s *service) OrderCreate(ctx context.Context, data model.Order) (uint64, er
 
 	err = s.stocksReserve(ctx, data.Items)
 	if err != nil {
-		s.updateOrderStatus(ctx, model.Order{ID: id, Status: model.StatusFailed})
+		s.updateOrderStatus(ctx, uint64(id), model.StatusFailed)
 		return 0, err
 	}
 
-	s.updateOrderStatus(ctx, model.Order{ID: id, Status: model.StatusAwaitingPayment})
+	err = s.updateOrderStatus(ctx, uint64(id), model.StatusAwaitingPayment)
+	if err != nil {
+		return 0, err
+	}
 
-	return id, nil
+	for _, e := range data.Items {
+		err := s.ordersRepo.CreateItem(ctx, orders_repo.CreateItemParams{
+			OrderID: int64(id),
+			Sku:     int32(e.SKU),
+			Count:   int32(e.Count),
+		})
+		if err != nil {
+			return uint64(0), err
+		}
+	}
+
+	return uint64(id), nil
 }
 
 func (s *service) OrderGetInfo(ctx context.Context, orderID uint64) (model.Info, error) {
-	order, err := s.repo.GetOrder(ctx, orderID)
+	order, err := s.ordersRepo.GetOrder(ctx, int64(orderID))
 	if err != nil {
 		return model.Info{}, err
 	}
+
+	items, err := s.getItemsByOrderID(ctx, orderID)
+	if err != nil {
+		return model.Info{}, err
+	}
+
 	info := model.Info{
 		UserID: order.UserID,
-		Status: order.Status,
-		Items:  order.Items,
+		Status: order.Status.String,
+		Items:  items,
 	}
 
 	return info, nil
 }
 
 func (s *service) OrderPay(ctx context.Context, orderID uint64) error {
-	order, err := s.repo.GetOrder(ctx, orderID)
+	order, err := s.ordersRepo.GetOrder(ctx, int64(orderID))
 	if err != nil {
 		return err
 	}
 
-	if order.Status != model.StatusAwaitingPayment {
+	if order.Status.String != model.StatusAwaitingPayment {
 		return errors.New(internalErrors.ErrOrderStatus)
 	}
 
-	err = s.stocksRemove(ctx, order.Items, false)
+	items, err := s.getItemsByOrderID(ctx, orderID)
 	if err != nil {
 		return err
 	}
 
-	err = s.repo.UpdateOrderStatus(ctx, orderID, model.StatusPayed)
+	err = s.stocksRemove(ctx, items, false)
+	if err != nil {
+		return err
+	}
+
+	err = s.updateOrderStatus(ctx, orderID, model.StatusPayed)
 	if err != nil {
 		return err
 	}
@@ -131,21 +214,26 @@ func (s *service) OrderPay(ctx context.Context, orderID uint64) error {
 }
 
 func (s *service) OrderCancel(ctx context.Context, orderID uint64) error {
-	order, err := s.repo.GetOrder(ctx, orderID)
+	order, err := s.ordersRepo.GetOrder(ctx, int64(orderID))
 	if err != nil {
 		return err
 	}
 
-	if order.Status != model.StatusAwaitingPayment {
+	if order.Status.String != model.StatusAwaitingPayment {
 		return errors.New(internalErrors.ErrOrderStatus)
 	}
 
-	err = s.stocksRemove(ctx, order.Items, true)
+	items, err := s.getItemsByOrderID(ctx, orderID)
 	if err != nil {
 		return err
 	}
 
-	err = s.repo.UpdateOrderStatus(ctx, orderID, model.StatusCanceled)
+	err = s.stocksRemove(ctx, items, true)
+	if err != nil {
+		return err
+	}
+
+	err = s.updateOrderStatus(ctx, orderID, model.StatusCanceled)
 	if err != nil {
 		return err
 	}
@@ -154,7 +242,11 @@ func (s *service) OrderCancel(ctx context.Context, orderID uint64) error {
 }
 
 func (s *service) OrderGetStockInfo(ctx context.Context, skuID uint32) (uint64, error) {
-	stock := s.repo.GetStockBySKU(ctx, skuID)
+	stock, err := s.stocksRepo.GetStockBySKU(ctx, int32(skuID))
+	if err != nil {
+		return 0, err
+	}
+
 	count := uint64(stock.TotalCount - stock.Reserved)
 
 	return count, nil
