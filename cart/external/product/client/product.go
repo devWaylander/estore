@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -13,7 +14,7 @@ import (
 )
 
 const (
-	productUrl    = "http://route256.pavl.uk:8080"
+	getProductUrl = "http://route256.pavl.uk:8080/get_product"
 	tokenProductS = "testtoken"
 )
 
@@ -24,7 +25,7 @@ func New() *service {
 	return &service{}
 }
 
-func (s *service) GetProduct(ctx context.Context, SKU uint32) (*model.Good, error) {
+func (s *service) GetProduct(ctx context.Context, SKU uint32, count uint16) (*model.Good, error) {
 	if SKU == 0 {
 		return nil, errors.New(internalErrors.ErrBadSKU)
 	}
@@ -40,14 +41,17 @@ func (s *service) GetProduct(ctx context.Context, SKU uint32) (*model.Good, erro
 	}
 	reader := bytes.NewReader(data)
 
-	resp, err := http.Post(productUrl+"/get_product", "application/json", reader)
-	defer func() {
-		resp.Body.Close()
-	}()
+	req, err := http.NewRequestWithContext(ctx, "POST", getProductUrl, reader)
 	if err != nil {
-		log.Fatal(err)
-		return nil, err
+		log.Println(err)
+		return nil, fmt.Errorf("url: %s | create request %w", getProductUrl, err)
 	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Println(err)
+		return nil, fmt.Errorf("url: %s | do request: %w", getProductUrl, err)
+	}
+	defer resp.Body.Close()
 
 	pResp := model.ProductRespV1{}
 	if err := json.NewDecoder(resp.Body).Decode(&pResp); err != nil {
@@ -65,7 +69,7 @@ func (s *service) GetProduct(ctx context.Context, SKU uint32) (*model.Good, erro
 		SkuID: SKU,
 		Name:  pResp.Name,
 		Price: pResp.Price,
-		Count: 0,
+		Count: count,
 	}
 
 	return &good, err

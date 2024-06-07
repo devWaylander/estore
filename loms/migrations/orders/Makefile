@@ -1,9 +1,8 @@
-GOOSE_DRIVER := "postgres"
-GOOSE_DBSTRING := "postgres://postgres:12341234@127.0.0.1:1234/orders?sslmode=disable"
+include ../../../.env
 
 upMigrationsOrdersDB:
-	goose $(GOOSE_DRIVER) $(GOOSE_DBSTRING) up
+	goose ${GOOSE_DRIVER} ${GOOSE_ORDERS_DBSTRING} up
 downMigrationOrdersDB:
-	goose $(GOOSE_DRIVER) $(GOOSE_DBSTRING) down
+	goose ${GOOSE_DRIVER} ${GOOSE_ORDERS_DBSTRING} down
 statusOrdersDB:
-	goose $(GOOSE_DRIVER) $(GOOSE_DBSTRING) status
+	goose ${GOOSE_DRIVER} ${GOOSE_ORDERS_DBSTRING} status

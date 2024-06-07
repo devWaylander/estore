@@ -8,6 +8,7 @@ import (
 	desc "route256.ozon.ru/project/cart/external/stocks/gen/api/orders/v1"
 	internalErrors "route256.ozon.ru/project/cart/internal/errors"
 	"route256.ozon.ru/project/cart/internal/model"
+	"route256.ozon.ru/project/cart/util"
 )
 
 type Repository interface {
@@ -19,7 +20,7 @@ type Repository interface {
 }
 
 type ProductClient interface {
-	GetProduct(ctx context.Context, SKU uint32) (*model.Good, error)
+	GetProduct(ctx context.Context, SKU uint32, count uint16) (*model.Good, error)
 }
 
 type StocksClient interface {
@@ -53,7 +54,7 @@ func (s *service) AddToCart(ctx context.Context, userID, skuID int64, count uint
 		}
 	}
 
-	good, err := s.productClient.GetProduct(ctx, uint32(skuID))
+	good, err := s.productClient.GetProduct(ctx, uint32(skuID), count)
 	if err != nil {
 		return err
 	}
@@ -126,13 +127,31 @@ func (s *service) GetCart(ctx context.Context, userID int64) (*model.Cart, error
 		return nil, nil
 	}
 
+	errGroups := make([]*util.ProductGroup, 0, len(cart.Goods))
+	// errorGroup для каждого запроса c клиента GetProduct
 	for _, g := range cart.Goods {
-		good, err := s.productClient.GetProduct(ctx, g.SkuID)
-		if err != nil && good == nil {
-			log.Println(err)
-			cart.TotalPrice = cart.TotalPrice + g.Price*uint32(g.Count)
+		eg, ctx := util.EGWithContext(ctx)
+		eg.SetLimit(10)
+
+		eg.GoPayload(func() (*model.Good, error) {
+			defer func() {
+				if err != nil {
+					log.Println(err)
+				}
+			}()
+			return s.productClient.GetProduct(ctx, g.SkuID, g.Count)
+		})
+
+		errGroups = append(errGroups, eg)
+	}
+
+	for _, eg := range errGroups {
+		good, err := eg.Wait()
+
+		if err != nil || good == nil {
+			return nil, err
 		} else {
-			cart.TotalPrice = cart.TotalPrice + good.Price*uint32(g.Count)
+			cart.TotalPrice = cart.TotalPrice + good.Price*uint32(good.Count)
 		}
 	}
 
@@ -160,7 +179,7 @@ func (s *service) Checkout(ctx context.Context, userID int64) (model.Order, erro
 
 	err = s.CleanUpCart(ctx, userID)
 	if err != nil {
-		log.Panicln(err)
+		return model.Order{}, err
 	}
 
 	return model.Order{ID: orderID}, nil

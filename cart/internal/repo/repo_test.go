@@ -12,6 +12,7 @@ const (
 	// magic 27 for cpu=16 :)
 	parallelism = 27
 	skuID       = 31147466
+	skuID2      = 773297411
 	userID      = 1
 	cartID      = userID + 1
 )
@@ -22,6 +23,7 @@ type inputData struct {
 	count  uint16
 	cart   model.Cart
 	good   model.Good
+	good2  model.Good
 }
 
 func BenchmarkAddGoodToCart(b *testing.B) {
@@ -39,13 +41,21 @@ func BenchmarkAddGoodToCart(b *testing.B) {
 		},
 	}
 
+	// многопоточно тестим 1 мемори репозиторий
+	repo := New()
 	b.SetParallelism(parallelism)
 	b.RunParallel(func(p *testing.PB) {
 		for p.Next() {
-			repo := New()
 			repo.CreateCart(ctx, inputData.userID)
 
-			repo.AddGoodToCart(ctx, inputData.userID, inputData.good)
+			err := repo.AddGoodToCart(ctx, inputData.userID, inputData.good)
+			if err != nil {
+				panic(err)
+			}
+			err = repo.AddGoodToCart(ctx, inputData.userID, inputData.good2)
+			if err != nil {
+				panic(err)
+			}
 		}
 	})
 }
@@ -103,10 +113,20 @@ func TestGetCartByUserID(t *testing.T) {
 				skuID:  skuID,
 				count:  10,
 				cart: model.Cart{
-					ID:         cartID,
-					UserID:     userID,
-					Goods:      map[uint32]model.Good{},
-					TotalPrice: uint32(0),
+					ID:     cartID,
+					UserID: userID,
+					Goods: map[uint32]model.Good{skuID: {
+						SkuID: skuID,
+						Name:  "Good good",
+						Price: 123,
+						Count: 1,
+					}, skuID2: {
+						SkuID: skuID2,
+						Name:  "Good good 2",
+						Price: 321,
+						Count: 10,
+					}},
+					TotalPrice: uint32(3333),
 				},
 			},
 			wantErr: nil,
@@ -169,6 +189,11 @@ func TestAddGoodToCart(t *testing.T) {
 						Name:  "Good good",
 						Price: 123,
 						Count: 1,
+					}, skuID2: {
+						SkuID: skuID2,
+						Name:  "Good good 2",
+						Price: 321,
+						Count: 10,
 					}},
 					TotalPrice: uint32(0),
 				},
@@ -177,6 +202,12 @@ func TestAddGoodToCart(t *testing.T) {
 					Name:  "Good good",
 					Price: 123,
 					Count: 1,
+				},
+				good2: model.Good{
+					SkuID: skuID2,
+					Name:  "Good good 2",
+					Price: 321,
+					Count: 10,
 				},
 			},
 			wantErr: nil,
@@ -207,6 +238,9 @@ func TestAddGoodToCart(t *testing.T) {
 
 			cart, _ := repo.CreateCart(ctx, tt.inputData.userID)
 			err := repo.AddGoodToCart(ctx, tt.inputData.userID, tt.inputData.good)
+			if tt.inputData.good2.SkuID > 0 {
+				err = repo.AddGoodToCart(ctx, tt.inputData.userID, tt.inputData.good2)
+			}
 			cart, _ = repo.GetCartByUserID(ctx, tt.inputData.userID)
 
 			require.EqualValues(t, tt.inputData.cart, cart)

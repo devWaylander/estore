@@ -7,12 +7,14 @@ import (
 
 	"github.com/gojuno/minimock/v3"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	internalErrors "route256.ozon.ru/project/cart/internal/errors"
 	"route256.ozon.ru/project/cart/internal/model"
 )
 
 const (
 	skuID  = 773297411
+	skuID2 = 31147466
 	userID = 1
 	cartID = userID + 1
 )
@@ -21,6 +23,7 @@ type inputData struct {
 	userID int64
 	cartID int64
 	skuID  int64
+	skuID2 int64
 	count  uint16
 	goods  map[uint32]model.Good
 }
@@ -45,6 +48,7 @@ func TestAddToCart(t *testing.T) {
 			inputData: inputData{
 				userID: userID,
 				skuID:  skuID,
+				skuID2: skuID2,
 				count:  10,
 			},
 			wantErr: nil,
@@ -66,13 +70,18 @@ func TestAddToCart(t *testing.T) {
 
 			repoMock.GetCartByUserIDMock.Expect(ctx, tt.inputData.userID).Return(model.Cart{}, nil)
 			repoMock.CreateCartMock.Expect(ctx, tt.inputData.userID).Return(model.Cart{}, nil)
-			productClientMock.GetProductMock.Expect(ctx, uint32(tt.inputData.skuID)).Return(&model.Good{}, tt.wantErr)
+			productClientMock.GetProductMock.Expect(ctx, uint32(tt.inputData.skuID), tt.inputData.count).Return(&model.Good{}, tt.wantErr)
 			stocksClientMock.GetStocksInfoMock.Expect(ctx, uint32(tt.inputData.skuID)).Return(uint64(tt.inputData.count), tt.wantErr)
 			if tt.wantErr == nil {
 				repoMock.AddGoodToCartMock.Expect(ctx, tt.inputData.userID, model.Good{Count: tt.inputData.count}).Return(nil)
 			}
 
 			err := service.AddToCart(ctx, tt.inputData.userID, tt.inputData.skuID, tt.inputData.count)
+			if tt.inputData.skuID2 > 0 {
+				productClientMock.GetProductMock.Expect(ctx, uint32(tt.inputData.skuID2), tt.inputData.count).Return(&model.Good{}, tt.wantErr)
+				stocksClientMock.GetStocksInfoMock.Expect(ctx, uint32(tt.inputData.skuID2)).Return(uint64(tt.inputData.count), tt.wantErr)
+				err = service.AddToCart(ctx, tt.inputData.userID, tt.inputData.skuID2, tt.inputData.count)
+			}
 			require.ErrorIs(t, err, tt.wantErr)
 		})
 	}
@@ -195,8 +204,8 @@ func TestGetCart(t *testing.T) {
 				userID: userID,
 				cartID: cartID,
 				goods: map[uint32]model.Good{
-					1: {SkuID: 1, Name: "a", Price: 1, Count: 1},
-					2: {SkuID: 2, Name: "b", Price: 2, Count: 2},
+					1: {SkuID: skuID, Name: "a", Price: 1, Count: 1},
+					2: {SkuID: skuID2, Name: "b", Price: 2, Count: 2},
 				},
 			},
 			wantErr: nil,
@@ -215,14 +224,20 @@ func TestGetCart(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
+			cancelCtx, _ := context.WithCancelCause(ctx)
 
 			repoMock.GetCartByUserIDMock.Expect(ctx, tt.inputData.userID).Return(model.Cart{ID: tt.inputData.cartID, Goods: tt.inputData.goods}, tt.wantErr)
 			for i := range tt.inputData.goods {
-				productClientMock.GetProductMock.When(ctx, tt.inputData.goods[i].SkuID).Then(&model.Good{}, tt.wantErr)
+				good := tt.inputData.goods[i]
+				productClientMock.GetProductMock.When(cancelCtx, tt.inputData.goods[i].SkuID, tt.inputData.goods[i].Count).Then(&good, tt.wantErr)
 			}
 
 			_, err := service.GetCart(ctx, tt.inputData.userID)
 			require.ErrorIs(t, err, tt.wantErr)
 		})
 	}
+}
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
 }

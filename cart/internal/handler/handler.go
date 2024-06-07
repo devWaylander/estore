@@ -25,11 +25,9 @@ type Service interface {
 	Checkout(ctx context.Context, userID int64) (model.Order, error)
 }
 
-func Configure(mux *http.ServeMux, service Service) {
+func Configure(ctx context.Context, mux *http.ServeMux, service Service) {
 	// Добавить товар в корзину: POST /user/<user_id>/cart/<sku_id>
 	mux.HandleFunc(fmt.Sprintf("POST /user/{%s}/cart/{%s}", userIDPath, skuIDPath), func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.Background()
-
 		userID, err := strconv.ParseInt(r.PathValue(userIDPath), 10, 64)
 		if err != nil {
 			log.Println(err.Error())
@@ -69,8 +67,6 @@ func Configure(mux *http.ServeMux, service Service) {
 
 	// Удалить товар из корзины: DELETE /user/<user_id>/cart/<sku_id>
 	mux.HandleFunc(fmt.Sprintf("DELETE /user/{%s}/cart/{%s}", userIDPath, skuIDPath), func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.Background()
-
 		userID, err := strconv.ParseInt(r.PathValue(userIDPath), 10, 64)
 		if err != nil {
 			log.Println(err.Error())
@@ -94,8 +90,6 @@ func Configure(mux *http.ServeMux, service Service) {
 
 	// Зачистить корзину: DELETE /user/<user_id>/cart
 	mux.HandleFunc(fmt.Sprintf("DELETE /user/{%s}/cart", userIDPath), func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.Background()
-
 		userID, err := strconv.ParseInt(r.PathValue(userIDPath), 10, 64)
 		if err != nil {
 			log.Println(err.Error())
@@ -113,8 +107,6 @@ func Configure(mux *http.ServeMux, service Service) {
 
 	// Получить корзину: GET /user/<user_id>/cart
 	mux.HandleFunc(fmt.Sprintf("GET /user/{%s}/cart", userIDPath), func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.Background()
-
 		userID, err := strconv.ParseInt(r.PathValue(userIDPath), 10, 64)
 		if err != nil {
 			log.Println(err.Error())
@@ -149,8 +141,6 @@ func Configure(mux *http.ServeMux, service Service) {
 
 	// Создать заказ из корзины: POST /user/<user_id>/cart/checkout
 	mux.HandleFunc(fmt.Sprintf("POST /user/{%s}/cart/checkout", userIDPath), func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.Background()
-
 		userID, err := strconv.ParseInt(r.PathValue(userIDPath), 10, 64)
 		if err != nil {
 			log.Println(err.Error())

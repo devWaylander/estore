@@ -14,6 +14,9 @@ VALUES (1004, 300, 40);
 
 INSERT INTO stocks."stock" (sku, total_count, reserved)
 VALUES (1005, 350, 50);
+
+INSERT INTO stocks."stock" (sku, total_count, reserved)
+VALUES (5415913, 350, 50);
 -- +goose StatementEnd
 
 -- +goose Down

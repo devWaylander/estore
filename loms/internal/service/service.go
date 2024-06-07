@@ -5,8 +5,12 @@ import (
 	"errors"
 	"log"
 
+	"github.com/IBM/sarama"
 	"github.com/jackc/pgx/v5/pgtype"
 	internalErrors "route256.ozon.ru/project/loms/internal/errors"
+	"route256.ozon.ru/project/loms/internal/infra/kafka"
+	"route256.ozon.ru/project/loms/internal/infra/kafka/events"
+	"route256.ozon.ru/project/loms/internal/infra/kafka/messages"
 	"route256.ozon.ru/project/loms/internal/model"
 	orders_repo "route256.ozon.ru/project/loms/internal/repo/db_repo/orders"
 	stocks_repo "route256.ozon.ru/project/loms/internal/repo/db_repo/stocks"
@@ -35,14 +39,18 @@ type StockRepository interface {
 }
 
 type service struct {
-	ordersRepo OrderRepository
-	stocksRepo StockRepository
+	ordersRepo   OrderRepository
+	stocksRepo   StockRepository
+	syncProducer sarama.SyncProducer
+	kafkaConfig  kafka.Config
 }
 
-func New(ordersRepo OrderRepository, stocksRepo StockRepository) *service {
+func New(ordersRepo OrderRepository, stocksRepo StockRepository, syncProducer sarama.SyncProducer, config kafka.Config) *service {
 	return &service{
-		ordersRepo: ordersRepo,
-		stocksRepo: stocksRepo,
+		ordersRepo:   ordersRepo,
+		stocksRepo:   stocksRepo,
+		syncProducer: syncProducer,
+		kafkaConfig:  config,
 	}
 }
 
@@ -72,6 +80,19 @@ func (s *service) updateOrderStatus(ctx context.Context, orderID uint64, status 
 		log.Println(err)
 		return err
 	}
+
+	eventFactory := events.NewDefaultFactory(int(orderID))
+	event := eventFactory.Create(status)
+
+	messageFactory := messages.NewDefaultFactory()
+	message := messageFactory.Create(event, s.kafkaConfig)
+
+	partition, offset, err := s.syncProducer.SendMessage(message)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("key: %d, partition: %d, offset: %d", event.ID, partition, offset)
 
 	return nil
 }

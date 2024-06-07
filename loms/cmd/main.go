@@ -5,23 +5,25 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
+	"github.com/IBM/sarama"
 	pgx "github.com/jackc/pgx/v5"
+	"github.com/joho/godotenv"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	desc "route256.ozon.ru/project/loms/gen/api/orders/v1"
 	controller "route256.ozon.ru/project/loms/internal/app"
+	"route256.ozon.ru/project/loms/internal/infra/kafka"
+	"route256.ozon.ru/project/loms/internal/infra/kafka/producer"
 	orders_repo "route256.ozon.ru/project/loms/internal/repo/db_repo/orders"
 	stocks_repo "route256.ozon.ru/project/loms/internal/repo/db_repo/stocks"
 	"route256.ozon.ru/project/loms/internal/service"
 	"route256.ozon.ru/project/loms/middleware"
-)
-
-const (
-	grpcPort       = "50051"
-	jsonStockPath  = "../stock-data.json"
-	ordersDBString = "postgres://postgres:12341234@127.0.0.1:1234/orders?sslmode=disable"
-	stocksDBString = "postgres://postgres:12341234@127.0.0.1:1234/stocks?sslmode=disable"
+	"route256.ozon.ru/project/loms/util"
 )
 
 // func headerMatcher(key string) (string, bool) {
@@ -34,9 +36,24 @@ const (
 // }
 
 func main() {
-	ctx := context.Background()
+	err := godotenv.Load("../.env")
+	if err != nil {
+		log.Fatal("failed to load .env file")
+	}
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", grpcPort))
+	// Graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		c := make(chan os.Signal, 2)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+		<-c
+		cancel()
+	}()
+
+	// GRPC server
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", os.Getenv("PORT")))
 	if err != nil {
 		panic(err)
 	}
@@ -49,6 +66,7 @@ func main() {
 	)
 	reflection.Register(grpcServer)
 
+	// in-memory repo
 	// jsonStock, err := os.Open(jsonStockPath)
 	// if err != nil {
 	// 	log.Panic(err)
@@ -56,28 +74,64 @@ func main() {
 	// defer jsonStock.Close()
 	// memoryRepo := memory_repo.New(jsonStock)
 
-	dbStocksConn, err := pgx.Connect(ctx, stocksDBString)
+	// Postgres
+	dbStocksConn, err := pgx.Connect(ctx, os.Getenv("STOCKS_DB_STRING"))
 	if err != nil {
 		panic(err)
 	}
 	defer dbStocksConn.Close(ctx)
 	repoStocks := stocks_repo.New(dbStocksConn)
 
-	dbOrdersConn, err := pgx.Connect(ctx, ordersDBString)
+	dbOrdersConn, err := pgx.Connect(ctx, os.Getenv("ORDERS_DB_STRING"))
 	if err != nil {
 		panic(err)
 	}
 	defer dbOrdersConn.Close(ctx)
 	repoOrders := orders_repo.New(dbOrdersConn)
 
-	service := service.New(repoOrders, repoStocks)
-	controller := controller.New(service)
+	// Kafka
+	conf := kafka.NewConfig(kafka.CliFlags)
 
+	prod, err := producer.NewSyncProducer(conf.Kafka,
+		producer.WithIdempotent(),
+		producer.WithRequiredAcks(sarama.WaitForAll),
+		producer.WithMaxOpenRequests(1),
+		producer.WithMaxRetries(5),
+		producer.WithRetryBackoff(10*time.Millisecond),
+		//producer.WithProducerPartitioner(sarama.NewManualPartitioner),
+		//producer.WithProducerPartitioner(sarama.NewRoundRobinPartitioner),
+		producer.WithProducerPartitioner(sarama.NewRandomPartitioner),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// App run
+	service := service.New(repoOrders, repoStocks, prod, conf)
+	controller := controller.New(service)
 	desc.RegisterLOMSServer(grpcServer, controller)
 
-	log.Printf("Server listening at %v", lis.Addr())
-	if err = grpcServer.Serve(lis); err != nil {
-		log.Fatalf("failed to serve: %v", err)
+	// Graceful shutdown
+	g, gCtx := util.EGWithContext(ctx)
+	g.Go(func() error {
+		log.Printf("GRPC server listening at %v", lis.Addr())
+		return grpcServer.Serve(lis)
+	})
+	g.Go(func() error {
+		<-gCtx.Done()
+		log.Printf("Sync sarama producer is shutting down")
+		prod.Close()
+		return err
+	})
+	g.Go(func() error {
+		<-gCtx.Done()
+		log.Printf("GRPC server is shutting down")
+		grpcServer.GracefulStop()
+		return err
+	})
+
+	if err := g.Wait(); err != nil {
+		log.Printf("exit reason: %s \\n", err)
 	}
 
 	// go func() {
